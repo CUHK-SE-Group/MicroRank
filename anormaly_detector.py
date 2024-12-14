@@ -41,8 +41,10 @@ def get_slo(start_time, end_time):
 '''
 
 
-def system_anormaly_detect(start_time, end_time, slo, operation_list):
-    span_list = get_span(start_time, end_time)
+def system_anomaly_detect(data,start_time, end_time, slo, operation_list):
+    normal_list = []  # normal traceid list
+    abnormal_list = []  # abnormal traceid list
+    span_list = get_span(data,start_time, end_time)
     if len(span_list) == 0:
         print("Error: Current span list is empty ")
         return False
@@ -58,22 +60,28 @@ def system_anormaly_detect(start_time, end_time, slo, operation_list):
         for operation in operation_count[trace_id]:
             if "duration" == operation:
                 continue
-            expect_duration += operation_count[trace_id][operation] * (
-                slo[operation][0] + 1.5 * slo[operation][1])
+            try:
+                expect_duration += operation_count[trace_id][operation] * (
+                    slo[operation][0] + 3 * slo[operation][1]) # k sigma, sigma=3
+            except:
+                expect_duration += 0
 
         if real_duration > expect_duration:
             anormaly_trace += 1
-
+            abnormal_list.append(trace_id)
+        else:
+            normal_list.append(trace_id)
     print("anormaly_trace", anormaly_trace)
     print("total_trace", total_trace)
     print()
-    if anormaly_trace > 8:
-        anormaly_rate = float(anormaly_trace) / total_trace
-        print("anormaly_rate", anormaly_rate)
-        return True
-
+    #if anormaly_trace > 8:
+    #    anormaly_rate = float(anormaly_trace) / total_trace
+    #    print("anormaly_rate", anormaly_rate)
+    #    return True
+    if anormaly_trace:
+        return True, abnormal_list, normal_list
     else:
-        return False
+        return False, abnormal_list, normal_list
 
 
 '''

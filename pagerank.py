@@ -1,60 +1,5 @@
 import numpy as np
 
-a = np.array([[0, 1, 1 / 2, 0, 1 / 4, 1 / 2, 0],
-              [1 / 5, 0, 1 / 2, 1 / 3, 0, 0, 0],
-              [1 / 5, 0, 0, 1 / 3, 1 / 4, 0, 0],
-              [1 / 5, 0, 0, 0, 1 / 4, 0, 0],
-              [1 / 5, 0, 0, 1 / 3, 0, 1 / 2, 1],
-              [0, 0, 0, 0, 1 / 4, 0, 0],
-              [1 / 5, 0, 0, 0, 0, 0, 0]], dtype=float)
-
-pr = np.array([[1 / 2],
-               [1 / 3],
-               [1 / 4],
-               [0],
-               [0],
-               [0],
-               [0]], dtype=float)
-
-
-# print Pagerank matrix
-def show_matrix(matrix, pr):
-    print()
-    print('Metrix:')
-    n = len(pr)
-    for i in range(n):
-        for j in range(n):
-            print(matrix[i][j], ' ', end=' ')
-        print()
-
-    print()
-    print('Pr:')
-    for i in range(n):
-        print(pr[i][0], ' ', end=' ')
-    print('\nSize:', len(pr))
-
-
-def normalization(a):
-    sumCol = np.sum(a, axis=0)
-
-    for i in range(a.shape[0]):
-        if sumCol[i] == 0:
-            print('col: %d, sum: %.5f' % (i, sumCol[i]))
-            continue
-        for j in range(a.shape[1]):
-            a[j][i] = a[j][i] / sumCol[i]
-    return a
-
-
-def firstPr(c):
-    pr = np.zeros((c.shape[0], 1), dtype=float)
-
-    # sum = np.sum(c, axis=0)[0]
-    # print(sum)
-    for i in range(c.shape[0]):
-        pr[i] = c[i][0] / c.shape[0]
-    # print pr,"\n==================================================="
-    return pr
 
 
 '''
@@ -91,23 +36,20 @@ def trace_pagerank(operation_operation, operation_trace, trace_operation, pr_tra
         child_num = len(operation_operation[operation])
 
         for child in operation_operation[operation]:
-            p_ss[node_list.index(child)][node_list.index(
-                operation)] = 1.0 / child_num
+            p_ss[node_list.index(child)][node_list.index(operation)] = 1.0 / child_num
 
     # matrix node*request
     for trace_id in operation_trace:
         child_num = len(operation_trace[trace_id])
         for child in operation_trace[trace_id]:
-            p_sr[node_list.index(child)][trace_list.index(trace_id)] \
-                = 1.0 / child_num
+            p_sr[node_list.index(child)][trace_list.index(trace_id)] = 1.0 / child_num
 
     # matrix request*node
     for operation in trace_operation:
         child_num = len(trace_operation[operation])
 
         for child in trace_operation[operation]:
-            p_rs[trace_list.index(child)][node_list.index(operation)] \
-                = 1.0 / child_num
+            p_rs[trace_list.index(child)][node_list.index(operation)] = 1.0 / child_num
 
     kind_list = np.zeros(len(trace_list))
     p_srt = p_sr.T
@@ -129,20 +71,23 @@ def trace_pagerank(operation_operation, operation_trace, trace_operation, pr_tra
         for trace_id in pr_trace:
             num_sum_trace += 1.0 / kind_list[trace_list.index(trace_id)]
         for trace_id in pr_trace:
-            pr[trace_list.index(trace_id)] = 1.0 / \
-                kind_list[trace_list.index(trace_id)] / num_sum_trace
+            pr[trace_list.index(trace_id)] = 1.0 / kind_list[trace_list.index(trace_id)] / num_sum_trace
     else:
         for trace_id in pr_trace:
             kind_sum_trace += 1.0 / kind_list[trace_list.index(trace_id)]
             num_sum_trace += 1.0 / len(pr_trace[trace_id])
         for trace_id in pr_trace:
-            pr[trace_list.index(trace_id)] = 1.0 / (kind_list[trace_list.index(trace_id)] / kind_sum_trace * 0.5
-                                                    + 1.0 / len(pr_trace[trace_id])) / num_sum_trace * 0.5
+            pr[trace_list.index(trace_id)] = (
+                1.0
+                / (kind_list[trace_list.index(trace_id)] / kind_sum_trace * 0.5 + 1.0 / len(pr_trace[trace_id]))
+                / num_sum_trace
+                * 0.5
+            )
 
-    if anomaly:
-        print('\nAnomaly_PageRank:')
-    else:
-        print('\nNormal_PageRank:')
+    # if anomaly:
+    #    print('\nAnomaly_PageRank:')
+    # else:
+    #    print('\nNormal_PageRank:')
     result = pageRank(p_ss, p_sr, p_rs, pr, operation_length, trace_length)
 
     weight = {}
@@ -159,8 +104,7 @@ def trace_pagerank(operation_operation, operation_trace, trace_operation, pr_tra
                 trace_num_list[operation] += 1
 
     for operation in operation_operation:
-        weight[operation] = result[node_list.index(
-            operation)][0] * sum / len(operation_operation)
+        weight[operation] = result[node_list.index(operation)][0] * sum / len(operation_operation)
 
     # for score in sorted(weight.items(), key=lambda x: x[1], reverse=True):
     #     print('%-50s: %.5f' % (score[0], score[1]))
@@ -171,24 +115,18 @@ def trace_pagerank(operation_operation, operation_trace, trace_operation, pr_tra
 # calculate pageRank vaule
 def pageRank(p_ss, p_sr, p_rs, v, operation_length, trace_length, d=0.85, alpha=0.01):
     iteration = 25
-    service_ranking_vector = np.ones(
-        (operation_length, 1)) / float(operation_length + trace_length)
-    request_ranking_vector = np.ones(
-        (trace_length, 1)) / float(operation_length + trace_length)
+    service_ranking_vector = np.ones((operation_length, 1)) / float(operation_length + trace_length)
+    request_ranking_vector = np.ones((trace_length, 1)) / float(operation_length + trace_length)
 
     for i in range(iteration):
-        updated_service_ranking_vector = d * \
-            (np.dot(p_sr, request_ranking_vector) +
-             alpha * np.dot(p_ss, service_ranking_vector))
-        updated_request_ranking_vector = d * \
-            np.dot(p_rs, service_ranking_vector) + (1.0 - d) * v
-        service_ranking_vector = updated_service_ranking_vector / \
-            np.amax(updated_service_ranking_vector)
-        request_ranking_vector = updated_request_ranking_vector / \
-            np.amax(updated_request_ranking_vector)
+        updated_service_ranking_vector = d * (
+            np.dot(p_sr, request_ranking_vector) + alpha * np.dot(p_ss, service_ranking_vector)
+        )
+        updated_request_ranking_vector = d * np.dot(p_rs, service_ranking_vector) + (1.0 - d) * v
+        service_ranking_vector = updated_service_ranking_vector / np.amax(updated_service_ranking_vector)
+        request_ranking_vector = updated_request_ranking_vector / np.amax(updated_request_ranking_vector)
 
-    normalized_service_ranking_vector = service_ranking_vector / \
-        np.amax(service_ranking_vector)
+    normalized_service_ranking_vector = service_ranking_vector / np.amax(service_ranking_vector)
     return normalized_service_ranking_vector
 
 

@@ -1,92 +1,17 @@
-import re
-import json
 import time
-import requests
+
 import numpy as np
-from copy import deepcopy
-import warnings
-import paramiko
-from elasticsearch import Elasticsearch, helpers
-warnings.filterwarnings("ignore")
+import pandas as pd
 
-es_url = 'http://11.11.11.24:9200'
+CSV_FILE_PATH = '/home/nn/workspace/MicroRank/otel-ob11-22/-1128-1130/normal/traces.csv'
 root_index = 'root'
-client = Elasticsearch([es_url])
 
 
-'''
-  Query the initial trace data from elasticsearch by scroll(1 min)
-  :arg
-      date: format 2020-08-14 or 2020-08-*
-      start: the timestamp of start time (ms)
-      end:  the timestamp of end time (ms)
-  :return
-      all span between start time and end time except jaeger-query service 
-'''
-
-
-def get_span(start=None, end=None):
-    local_time = time.localtime(start/1000)
-    day = time.strftime('%Y-%m', local_time)
-    index_name = 'jaeger-span-' + day + '-*'
-    scroll_api = es_url + "/" + index_name + "/_search?scroll=1m"
-    based_api = es_url + "/_search/scroll?filter_path=hits.hits._source"
-    headers = {"Content-Type": "application/json"}
-
-    query_data = {
-        "size": 10000,
-        "query": {
-            "bool": {
-                "must_not": [
-                    {
-                        "terms": {
-                            "process.serviceName": [
-                                "jaeger-query"
-                            ]}
-                    }
-                ],
-                "filter": {
-                    "range": {
-                        "startTimeMillis": {
-                            "lte": str(end),
-                            "gte": str(start)
-                        }
-                    }
-                }
-            }
-        },
-        "sort": {
-            "traceID": {
-                "order": "asc"
-            },
-            "startTime": {
-                "order": "asc"
-            }
-        }
-    }
-    data = requests.post(scroll_api, json=query_data, headers=headers).json()
-
-    for i in range(10):
-        if '_scroll_id' not in data:
-            print("query error, restart query scroll")
-            time.sleep(10)
-            data = requests.post(
-                scroll_api, json=query_data, headers=headers).json()
-        else:
-            break
-
-    scroll_data = {
-        "scroll": "1m",
-        "scroll": data['_scroll_id']
-    }
-    span_list = []
-    while 'hits' in data and len(data['hits']['hits']) > 0:
-        span_list += data['hits']['hits']
-        data = requests.post(based_api, json=scroll_data,
-                             headers=headers).json()
-
-    print('\nSpan Length:', len(span_list))
-    return span_list
+def get_span(df, start=None, end=None):
+    # startTime >= start  and startTime <= end
+    if start and end:
+        df = df[(df['startTime'] >= start) & (df['endTime'] <= end)]
+    return df
 
 
 '''
@@ -98,19 +23,13 @@ def get_span(start=None, end=None):
 '''
 
 
-def get_service_operation_list(span_list):
-    operation_list = []
-
-    for doc in span_list:
-        doc = doc['_source']
-        operation_name = doc['operationName']
-        operation_name = operation_name.split('/')[-1]
-
-        # Currencyservice_Convert
-        operation = doc['process']['serviceName'] + '_' + operation_name
-        if operation not in operation_list:
-            operation_list.append(operation)
-
+def get_service_operation_list(span_df: pd.DataFrame):
+    span_df['operation'] = np.where(
+        span_df['serviceName'] != 'ts-ui-dashboard',
+        span_df['serviceName'] + '_' + span_df['operationName'],
+        span_df['serviceName'] + '_' + span_df['operationName'].str.rsplit('/', n=1).str[0],
+    )
+    operation_list = span_df['operation'].drop_duplicates().tolist()
     return operation_list
 
 
@@ -128,131 +47,34 @@ def get_service_operation_list(span_list):
 """
 
 
-def get_operation_slo(service_operation_list, span_list):
-    template = {
-        'parent': '',  # parent span
-        'operation': '',  # current servicename_operation
-        'duration': 0  # duration of current operation
+def get_operation_slo(service_operation_list, span_df: pd.DataFrame):
+
+    # 创建操作名称列
+    span_df['operation'] = np.where(
+        span_df['serviceName'] != 'ts-ui-dashboard',
+        span_df['serviceName'] + '_' + span_df['operationName'],
+        span_df['serviceName'] + '_' + span_df['operationName'].str.rsplit('/', n=1).str[0],
+    )
+
+    # 过滤 duration > 1e9 的记录 ? 需要吗 先注释掉了
+    # span_df = span_df[span_df['duration'] <= 1e9]
+
+    # 过滤 ParentSpanId 为空且非 frontend 服务的记录 ? 需要吗 先注释掉了
+    # frontend_filter = (span_df['serviceName'] == 'frontend') & (span_df['SpanKind'].str.lower().str.contains('server'))
+    # span_df = span_df[frontend_filter | span_df['ParentSpanId'].notnull()]
+    # 聚合每个操作的持续时间
+    duration_series = span_df.groupby('operation')['duration'].apply(list)
+
+    # 计算均值和标准差
+    operation_slo = {
+        operation: [
+            round(np.mean(durations) / 1000.0, 4) if durations else 0,
+            # round(np.percentile(duration_dict[operation], 90) / 1000.0, 4) if durations else 0,
+            round(np.std(durations) / 1000.0, 4) if durations else 0,
+        ]
+        for operation, durations in duration_series.items()
+        if operation in service_operation_list
     }
-
-    traceid = span_list[0]['_source']['traceID']
-    filter_data = {}
-    temp = {}
-    normal_trace = True
-
-    def check_filter_data():
-        for spanid in temp:
-            if temp[spanid]['parent'] == root_index:
-                if temp[spanid]['duration'] > 1000000:
-                    print("filter data because duration > 1000ms")
-                    print(temp)
-                    return False
-        return True
-
-    def server_client_determined():
-        """
-        :return span.kind
-        tags: [{"key": "span.kind",
-            "type": "string",
-            "value": "server"}]
-        """
-        for tag in doc['tags']:
-            if tag['key'] == "span.kind":
-                return tag['value']
-
-    def get_operation_name():
-        operation_name = doc['operationName']
-        operation_name = operation_name.split('/')[-1]
-        operation_name = doc['process']['serviceName'] + '_' + operation_name
-        return operation_name
-
-    for doc in span_list:
-        doc = doc['_source']
-        if traceid == doc['traceID']:
-            spanid = doc['spanID']
-            temp[spanid] = deepcopy(template)
-            temp[spanid]['duration'] = doc['duration']
-            temp[spanid]['operation'] = get_operation_name()
-
-            if server_client_determined() == 'server' and doc['process']['serviceName'] == "frontend":
-                temp[spanid]['parent'] = root_index
-            else:
-                """
-               "references" : [{"refType" : "CHILD_OF",
-                "traceID" : "0000658f4e42f8674d2e36630a9ca2b8",
-                "spanID" : "83438897471cc41a"}],
-                """
-                if len(doc['references']) == 0:
-                    print(doc)
-                    normal_trace = False
-                else:
-                    parentId = doc['references'][0]['spanID']
-                    temp[spanid]['parent'] = parentId
-                    if parentId in temp:
-                        temp[parentId]['duration'] -= temp[spanid]['duration']
-                    else:
-                        normal_trace = False
-
-        elif traceid != doc['traceID'] and len(temp) > 0:
-            if check_filter_data() and normal_trace:
-                filter_data[traceid] = temp
-
-            traceid = doc['traceID']
-            normal_trace = True
-            spanid = doc['spanID']
-            temp = {}
-            temp[spanid] = deepcopy(template)
-            temp[spanid]['duration'] = doc['duration']
-            temp[spanid]['operation'] = get_operation_name()
-            if server_client_determined() == 'server' and doc['process']['serviceName'] == "frontend":
-                temp[spanid]['parent'] = root_index
-            else:
-                if len(doc['references']) == 0:
-                    normal_trace = False
-                    print(
-                        "filter data because it is not frontend and its references is null ")
-                    print(traceid)
-                else:
-                    parentId = doc['references'][0]['spanID']
-                    temp[spanid]['parent'] = parentId
-                if parentId in temp:
-                    temp[parentId]['duration'] -= temp[spanid]['duration']
-                else:
-                    normal_trace = False
-    # The last trace
-    if len(temp) > 1:
-        if check_filter_data() and normal_trace:
-            filter_data[traceid] = temp
-
-    duration_dict = {}
-    """
-    {'frontend_Recv.': [1961, 1934, 1316, 1415, 1546, 1670, 1357, 2099, 2789, 1832, 1270, 1242, 2230, 1386],
-      'recommendationservice_ListProducts': [3576, 7127, 4387, 19657, 5158, 4563, 4167, 8822, 4507],
-    """
-    for operation in service_operation_list:
-        duration_dict[operation] = []
-
-    for traceid in filter_data:
-        single_trace = filter_data[traceid]
-
-        for spanid in single_trace:
-            duration_dict[single_trace[spanid]['operation']].append(
-                single_trace[spanid]['duration'])
-
-    operation_slo = {}
-    """
-    {'frontend_Recv.': [2.903, 10.0949], 'frontend_GetSupportedCurrencies': [8.1019, 16.2973], }
-    """
-    for operation in service_operation_list:
-        operation_slo[operation] = []
-
-    for operation in service_operation_list:
-        operation_slo[operation].append(
-            round(np.mean(duration_dict[operation]) / 1000.0, 4))
-        #operation_slo[operation].append(round(np.percentile(duration_dict[operation], 90) / 1000.0, 4))
-        operation_slo[operation].append(
-            round(np.std(duration_dict[operation]) / 1000.0, 4))
-
     return operation_slo
 
 
@@ -272,59 +94,30 @@ def get_operation_slo(service_operation_list, span_list):
 '''
 
 
-def get_operation_duration_data(operation_list, span_list):
-    operation_dict = {}
+def get_operation_duration_data(operation_list, span_df: pd.DataFrame):
+    # Create operation names
 
-    trace_id = span_list[0]['_source']['traceID']
+    span_df['operationName'] = np.where(
+        span_df['serviceName'] != 'ts-ui-dashboard',
+        span_df['serviceName'] + '_' + span_df['operationName'],
+        span_df['serviceName'] + '_' + span_df['operationName'].str.rsplit('/', n=1).str[0],
+    )
 
-    def server_client_determined():
-        for tag in doc['tags']:
-            if tag['key'] == "span.kind":
-                return tag['value']
+    # Group by traceID and operationName
+    grouped = span_df.groupby(['traceID', 'operationName']).size().unstack(fill_value=0)
 
-    def get_operation_name():
-        operation_name_tmp = doc['operationName']
-        operation_name_tmp = operation_name_tmp.split('/')[-1]
-        operation_name_tmp = doc['process']['serviceName'] + \
-            '_' + operation_name_tmp
-        return operation_name_tmp
+    # Calculate duration for frontend server spans
+    duration = span_df.groupby('traceID')['duration'].max()
 
-    def init_dict(trace_id):
-        if trace_id not in operation_dict:
-            operation_dict[trace_id] = {}
-            for operation in operation_list:
-                operation_dict[trace_id][operation] = 0
-            operation_dict[trace_id]['duration'] = 0
+    # Add duration to grouped DataFrame
+    grouped['duration'] = duration
 
-    length = 0
-    for doc in span_list:
-        doc = doc['_source']
-        tag = server_client_determined()
-        operation_name = get_operation_name()
+    # Filter based on duration and length
+    grouped = grouped.dropna(subset=['duration'])
+    grouped = grouped[grouped['duration'] > 0]
 
-        init_dict(doc['traceID'])
-
-        if trace_id == doc['traceID']:
-            operation_dict[trace_id][operation_name] += 1
-            length += 1
-
-            if doc['process']['serviceName'] == "frontend" and tag == "server":
-                operation_dict[trace_id]['duration'] += doc['duration']
-
-        else:
-            if operation_dict[trace_id]['duration'] == 0:
-                if length > 45:
-                    operation_dict.pop(trace_id)
-
-                else:
-                    operation_dict.pop(trace_id)
-
-            trace_id = doc['traceID']
-            length = 0
-            operation_dict[trace_id][operation_name] += 1
-
-            if doc['process']['serviceName'] == "frontend" and tag == "server":
-                operation_dict[trace_id]['duration'] += doc['duration']
+    # Convert to dictionary
+    operation_dict = grouped.to_dict(orient='index')
 
     return operation_dict
 
@@ -350,121 +143,36 @@ def get_operation_duration_data(operation_list, span_list):
 '''
 
 
-def get_pagerank_graph(trace_list, span_list):
-    template = {
-        'parent': '',  # parent span
-        'operation': '',  # current servicename_operation
-    }
+def get_pagerank_graph(trace_list, span_df: pd.DataFrame):
+    # 过滤 trace_list 中的 traceID
+    filtered_df = span_df[span_df['traceID'].isin(trace_list)].copy()
 
-    if len(trace_list) > 0:
-        traceid = trace_list[0]
-    else:
-        traceid = span_list[0]
-    filter_data = {}
-    temp = {}
-
-    def get_operation_name():
-        """
-        有时pod_name在 tags 中，有时在process的tags中
-        "process": {"tags": [{"key": "name",
-                    "type": "string",
-                    "value": "frontend-7dbb469cd9-lkv68"}]}
-        "tags" : [{"key" : "name",
-              "type" : "string",
-              "value" : "adservice-7688bd74f6-7qkvl"}]
-
-        operation = pod_name + operation_name
-        :return operation
-        """
-        pod_name = ""
-
-        for tag in doc['process']['tags']:
-            if tag['key'] == "name":
-                pod_name = tag['value']
-
-        for tag in doc['tags']:
-            if tag['key'] == "name":
-                pod_name = tag['value']
-
-        operation = pod_name + "_" + doc['operationName']
-        return operation
-
-    operation_operation = {}
-    operation_trace = {}
-    trace_operation = {}
-    pr_trace = {}
-
-    for doc in span_list:
-        doc = doc['_source']
-        operation_name = get_operation_name()
-        if doc['traceID'] in trace_list:
-            if traceid == doc['traceID']:
-                spanid = doc['spanID']
-                temp[spanid] = deepcopy(template)
-                temp[spanid]['operation'] = get_operation_name()
-
-                if len(doc['references']) > 0:
-                    parentId = doc['references'][0]['spanID']
-                    temp[spanid]['parent'] = parentId
-
-            elif traceid != doc['traceID'] and len(temp) > 0:
-                filter_data[traceid] = temp
-
-                traceid = doc['traceID']
-                spanid = doc['spanID']
-                temp = {}
-                temp[spanid] = deepcopy(template)
-                temp[spanid]['operation'] = get_operation_name()
-
-                if len(doc['references']) > 0:
-                    parentId = doc['references'][0]['spanID']
-                    temp[spanid]['parent'] = parentId
-
-            if len(temp) > 1:
-                filter_data[traceid] = temp
-
-            """
-            operation_operation 
-            operation_operation[operation_name] = [operation_name1 , operation_name1 ] 
-
-            operation_trace
-            operation_trace[traceid] = [operation_name1 , operation_name1]
-
-            trace_operation
-            trace_operation[operation_name] = [traceid1, traceid2]
-            """
-            if operation_name not in operation_operation:
-                operation_operation[operation_name] = []
-                trace_operation[operation_name] = []
-
-            if doc['traceID'] not in operation_trace:
-                operation_trace[doc['traceID']] = []
-                pr_trace[doc['traceID']] = []
-
-            pr_trace[doc['traceID']].append(operation_name)
-
-            if operation_name not in operation_trace[doc['traceID']]:
-                operation_trace[doc['traceID']].append(operation_name)
-            if doc['traceID'] not in trace_operation[operation_name]:
-                trace_operation[operation_name].append(doc['traceID'])
-
-    for traceid in filter_data:
-        single_trace = filter_data[traceid]
-        if traceid in trace_list:
-            for spanid in single_trace:
-                parent_id = single_trace[spanid]["parent"]
-                if parent_id != "":
-                    if parent_id not in single_trace:
-                        continue
-                    if single_trace[spanid]["operation"] not in operation_operation[
-                            single_trace[parent_id]["operation"]]:
-                        operation_operation[single_trace[parent_id]["operation"]].append(
-                            single_trace[spanid]["operation"])
+    # 创建 operation_name 列
+    filtered_df['operation_name'] = np.where(
+        filtered_df['serviceName'] != 'ts-ui-dashboard',
+        filtered_df['podName'] + '_' + filtered_df['operationName'],
+        filtered_df['podName'] + '_' + filtered_df['operationName'].str.rsplit('/', n=1).str[0],
+    )
+    # 构建 operation_operation
+    parent_child = filtered_df[['traceID', 'spanID', 'ParentSpanId', 'operation_name']]
+    merged = parent_child.merge(parent_child, left_on='ParentSpanId', right_on='spanID', suffixes=('_child', '_parent'))
+    operation_operation = merged.groupby('operation_name_parent')['operation_name_child'].apply(list).to_dict()
+    all_operations = filtered_df['operation_name'].unique()
+    for operation in all_operations:
+        if operation not in operation_operation:
+            operation_operation[operation] = []
+    # 构建 operation_trace
+    operation_trace = filtered_df.groupby('traceID')['operation_name'].apply(list).to_dict()
+    # 构建 trace_operation
+    trace_operation = filtered_df.groupby('operation_name')['traceID'].apply(list).to_dict()
+    # 构建 pr_trace
+    pr_trace = filtered_df.groupby('traceID')['operation_name'].apply(list).to_dict()
 
     return operation_operation, operation_trace, trace_operation, pr_trace
 
 
 if __name__ == '__main__':
+
     def timestamp(datetime):
         timeArray = time.strptime(datetime, "%Y-%m-%d %H:%M:%S")
         ts = int(time.mktime(timeArray)) * 1000
@@ -474,10 +182,14 @@ if __name__ == '__main__':
     start = '2020-08-28 14:56:43'
     end = '2020-08-28 14:57:44'
 
-    span_list = get_span(start=timestamp(start), end=timestamp(end))
+    span_df = get_span(CSV_FILE_PATH, start=timestamp(start), end=timestamp(end))
     # print(span_list)
-    operation_list = get_service_operation_list(span_list)
+    operation_list = get_service_operation_list(span_df)
     print(operation_list)
-    operation_slo = get_operation_slo(
-        service_operation_list=operation_list, span_list=span_list)
+    operation_slo = get_operation_slo(operation_list, span_df)
     print(operation_slo)
+    operation_dict = get_operation_duration_data(operation_list, span_df)
+    # print(operation_dict)
+    trace_list = list(operation_dict.keys())
+    operation_operation, operation_trace, trace_operation, pr_trace = get_pagerank_graph(trace_list, span_df)
+    print(operation_operation)
