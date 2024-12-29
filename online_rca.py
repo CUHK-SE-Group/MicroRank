@@ -158,8 +158,8 @@ def online_anomaly_detect_RCA(data, slo, operation_list):
     window_duration_normal = pd.Timedelta(minutes=5)
     window_duration_abnormal = pd.Timedelta(minutes=4)
     # Iterate over each 1-minute window
-    start = data['startTime'].min()
-    end = data['endTime'].max()
+    start = data['Timestamp'].min()
+    end = data['Timestamp'].max()
     current_time = start
     while current_time < end:
         start_time = current_time
@@ -194,26 +194,27 @@ def online_anomaly_detect_RCA(data, slo, operation_list):
                 normal_result=normal_trace_result,
                 anomaly_list_len=len(abnormal_list),
                 normal_list_len=len(normal_list),
-                top_max=5,
+                top_max=15,
                 anomaly_num_list=anomaly_num_list,
                 normal_num_list=normal_num_list,
-                spectrum_method="dstar2",
+                spectrum_method="ochiai",
             )
             print(top_list, score_list)
             # Pair services with scores
-            paired = list(zip(top_list, score_list))
+            service = {}
+            for span, score in zip(top_list, score_list):
+                if span.split('_')[0] not in service:
+                    service[span.split('_')[0]] = 0
+                service[span.split('_')[0]] += score
+            #paired = list(zip(top_list, score_list))
 
             # Sort by confidence descending
-            sorted_paired = sorted(paired, key=lambda x: x[1], reverse=True)
-
-            # Write to CSV
-            with open('result.csv', 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(['level', 'result', 'rank', 'confidence'])
-                for rank, (service, score) in enumerate(sorted_paired, start=1):
-                    writer.writerow(['span', service, rank, float(score)])
+            sorted_paired = sorted(service.items(), key=lambda x: x[1], reverse=True)
+            
+            return [item[0].split('_')[0] for item in sorted_paired]
             current_time += window_duration_abnormal  # + extra 4min
         current_time += window_duration_normal  # + 1min
+    return []
 
 
 if __name__ == '__main__':

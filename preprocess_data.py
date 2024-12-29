@@ -10,7 +10,7 @@ root_index = 'root'
 def get_span(df, start=None, end=None):
     # startTime >= start  and startTime <= end
     if start and end:
-        df = df[(df['startTime'] >= start) & (df['endTime'] <= end)]
+        df = df[(df['Timestamp'] >= start) & (df['Timestamp'] <= end)]
     return df
 
 
@@ -45,7 +45,21 @@ def get_service_operation_list(span_df: pd.DataFrame):
            "Currencyservice_Convert": [600, 3]}
        }   
 """
-
+def calculate_real_duration(parsed_df: pd.DataFrame) -> pd.DataFrame:
+    # Sum durations of child spans
+    child_duration_sum = parsed_df.groupby('ParentSpanId')['duration'].sum().reset_index()
+    child_duration_sum.rename(columns={'duration': 'ChildDurationSum'}, inplace=True)
+    
+    # Merge with the original DataFrame
+    parsed_df = parsed_df.merge(child_duration_sum, left_on='spanID', right_on='ParentSpanId', how='left')
+    
+    # Fill NaN values with 0 for spans without children
+    parsed_df['ChildDurationSum'] = parsed_df['ChildDurationSum'].fillna(0)
+    
+    # Calculate RealDuration
+    parsed_df['RealDuration'] = np.maximum(parsed_df['duration'] - parsed_df['ChildDurationSum'], 0)
+    parsed_df['duration'] = parsed_df['RealDuration']
+    return parsed_df.drop(columns=['ChildDurationSum', 'RealDuration'])
 
 def get_operation_slo(service_operation_list, span_df: pd.DataFrame):
 
@@ -62,6 +76,9 @@ def get_operation_slo(service_operation_list, span_df: pd.DataFrame):
     # 过滤 ParentSpanId 为空且非 frontend 服务的记录 ? 需要吗 先注释掉了
     # frontend_filter = (span_df['serviceName'] == 'frontend') & (span_df['SpanKind'].str.lower().str.contains('server'))
     # span_df = span_df[frontend_filter | span_df['ParentSpanId'].notnull()]
+    
+    span_df = calculate_real_duration(span_df)
+    
     # 聚合每个操作的持续时间
     duration_series = span_df.groupby('operation')['duration'].apply(list)
 
@@ -150,8 +167,8 @@ def get_pagerank_graph(trace_list, span_df: pd.DataFrame):
     # 创建 operation_name 列
     filtered_df['operation_name'] = np.where(
         filtered_df['serviceName'] != 'ts-ui-dashboard',
-        filtered_df['podName'] + '_' + filtered_df['operationName'],
-        filtered_df['podName'] + '_' + filtered_df['operationName'].str.rsplit('/', n=1).str[0],
+        filtered_df['serviceName'] + '_' + filtered_df['operationName'],
+        filtered_df['serviceName'] + '_' + filtered_df['operationName'].str.rsplit('/', n=1).str[0],
     )
     # 构建 operation_operation
     parent_child = filtered_df[['traceID', 'spanID', 'ParentSpanId', 'operation_name']]

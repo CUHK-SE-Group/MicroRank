@@ -62,7 +62,7 @@ def system_anomaly_detect(data,start_time, end_time, slo, operation_list):
                 continue
             try:
                 expect_duration += operation_count[trace_id][operation] * (
-                    slo[operation][0] + 3 * slo[operation][1]) # k sigma, sigma=3
+                    slo[operation][0] + 1.5 * slo[operation][1]) # k sigma, sigma=1.5
             except:
                 expect_duration += 0
 
@@ -74,11 +74,9 @@ def system_anomaly_detect(data,start_time, end_time, slo, operation_list):
     print("anormaly_trace", anormaly_trace)
     print("total_trace", total_trace)
     print()
-    #if anormaly_trace > 8:
-    #    anormaly_rate = float(anormaly_trace) / total_trace
-    #    print("anormaly_rate", anormaly_rate)
-    #    return True
-    if anormaly_trace:
+    if anormaly_trace > 8:
+        # anormaly_rate = float(anormaly_trace) / total_trace
+        # print("anormaly_rate", anormaly_rate)
         return True, abnormal_list, normal_list
     else:
         return False, abnormal_list, normal_list

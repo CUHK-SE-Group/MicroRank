@@ -1,0 +1,7 @@
+[[chaos_injection]]
+case = "seat-1130-1626"
+timestamp = 2024-11-30T16:26:55
+namespace = "ts"
+chaos_type = "delay"
+service = "seat"
+
