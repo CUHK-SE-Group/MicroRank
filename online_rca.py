@@ -10,9 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dateutil.parser import parse
-
 from anormaly_detector import system_anomaly_detect, trace_list_partition
+from dateutil.parser import parse
 from pagerank import trace_pagerank
 from preprocess_data import (
     get_operation_duration_data,
@@ -206,15 +205,15 @@ def online_anomaly_detect_RCA(data, slo, operation_list):
                 if span.split('_')[0] not in service:
                     service[span.split('_')[0]] = 0
                 service[span.split('_')[0]] += score
-            #paired = list(zip(top_list, score_list))
+            # paired = list(zip(top_list, score_list))
 
             # Sort by confidence descending
             sorted_paired = sorted(service.items(), key=lambda x: x[1], reverse=True)
-            
-            return [item[0].split('_')[0] for item in sorted_paired]
+
+            return (start_time, end_time), [item[0].split('_')[0] for item in sorted_paired]
             current_time += window_duration_abnormal  # + extra 4min
         current_time += window_duration_normal  # + 1min
-    return []
+    return (None, None), []
 
 
 if __name__ == '__main__':

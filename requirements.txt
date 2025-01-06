@@ -5,4 +5,3 @@ pandas==2.2.3
 pycryptodome==3.21.0
 pyyaml==6.0.2
 toml==0.10.2
-aiomultiprocess==0.9.1
