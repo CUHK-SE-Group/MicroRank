@@ -74,8 +74,8 @@ def system_anomaly_detect(data,start_time, end_time, slo, operation_list):
     print("anormaly_trace", anormaly_trace)
     print("total_trace", total_trace)
     print()
-    if anormaly_trace > 8:
-        # anormaly_rate = float(anormaly_trace) / total_trace
+    anormaly_rate = float(anormaly_trace) / total_trace
+    if anormaly_rate > 0.1:
         # print("anormaly_rate", anormaly_rate)
         return True, abnormal_list, normal_list
     else:
