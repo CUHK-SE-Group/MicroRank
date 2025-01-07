@@ -30,8 +30,8 @@ def evaluate(case_dir: Path):
             'Duration': 'duration',
         }
     )
-    normal_data['Timestamp'] = pd.to_datetime(normal_data['Timestamp'])
-    abnormal_data['Timestamp'] = pd.to_datetime(abnormal_data['Timestamp'])
+    normal_data['Timestamp'] = pd.to_datetime(normal_data['Timestamp'], format='mixed')
+    abnormal_data['Timestamp'] = pd.to_datetime(abnormal_data['Timestamp'], format='mixed')
     span_df = normal_data.copy()
     operation_list = get_service_operation_list(span_df)
     operation_slo = get_operation_slo(operation_list, span_df)
